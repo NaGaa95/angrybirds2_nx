@@ -37,6 +37,7 @@
 #include "libc_shim.h"
 #include "android_native_unity.h"
 #include "bsd_bridge.h"
+#include "unityfs_merge.h"
 
 // ---------------------------------------------------------------------------
 // fortify (_chk) wrappers: ignore the object-size argument
@@ -637,11 +638,12 @@ int open_fake(const char *path, int flags, ...) {
     int sfd = synth_proc_open(path);
     if (sfd >= 0) { fd_ino_set(sfd, path);  return sfd; }
   }
-  int fd = open(path, cvt, mode);
+  const char *actual_path = unityfs_redirect_path(path);
+  int fd = open(actual_path, cvt, mode);
   if (fd < 0 && writing) {
     // save files: the target subdir may not exist yet -- create it and retry
     mkdir_parents(path);
-    fd = open(path, cvt, mode);
+    fd = open(actual_path, cvt, mode);
   }
   if (fd < 0 && (flags & 3) == 0 && !(flags & LINUX_O_CREAT)) {
     char alt[320];
@@ -699,7 +701,8 @@ static void convert_stat(const struct stat *in, struct bionic_stat *out) {
 }
 
 int stat_fake(const char *path, struct bionic_stat *st) {
-  struct stat real; int r = stat(path, &real);
+  const char *actual_path = unityfs_redirect_path(path);
+  struct stat real; int r = stat(actual_path, &real);
   if (r != 0) {
     char alt[320];
     if (basename_fallback(path, alt, sizeof(alt))) r = stat(alt, &real);
@@ -1470,10 +1473,11 @@ FILE *fopen_fake(const char *path, const char *mode) {
     return fmemopen((void *)strdup(synth), n ? n : 1, "r");
   }
   const int writing = strpbrk(mode, "wa+") != NULL;
-  FILE *f = fopen(path, mode);
+  const char *actual_path = unityfs_redirect_path(path);
+  FILE *f = fopen(actual_path, mode);
   if (!f && writing) {            // save file: create the subdir and retry
     mkdir_parents(path);
-    f = fopen(path, mode);
+    f = fopen(actual_path, mode);
   }
   if (!f && !writing && strchr(mode, 'r')) {
     char alt[320];

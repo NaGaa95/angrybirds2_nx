@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #include "unity_jni.h"
+#include "unityfs_merge.h"
 #include "util.h"
 #include "config.h"   /* AB2_PACKAGE etc. */
 
@@ -95,6 +96,8 @@ const char *unity_recv_class(void *p){
 static void asset_path(char *out,size_t n,const char *name){
   while (name && (name[0]=='/' )) name++;
   snprintf(out,n,"%s/%s",g_assets,name?name:"");
+  const char *redirected = unityfs_redirect_path(out);
+  if (redirected != out) snprintf(out,n,"%s",redirected);
 }
 
 /* Path handed to *managed* code (persistentDataPath / dataPath via the Context

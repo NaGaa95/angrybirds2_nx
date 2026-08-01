@@ -20,6 +20,7 @@
 #include "opensles.h"
 #include "unity_entrypoints.h"
 #include "unity_jni.h"
+#include "unityfs_merge.h"
 
 #define DATA_ROOT  GAME_HOME          /* sdmc:/switch/angrybird2_nx */
 #define LIB_MAIN   "libmain.so"
@@ -380,14 +381,13 @@ static void check_syscalls(void) {
   if (envGetOwnProcessHandle() == INVALID_HANDLE) fatal_error("Own process handle is unavailable.");
 }
 
-/* Verify the essential data files exist (staged flat on the SD by tools/stage_sd.py:
- * the 3 arm64 libs + the merged base + UnityDataAssetPack asset trees). */
+/* Verify the essential data files exist. unityfs_prepare() accepts either the
+ * desktop-staged merged archive or the two ordinary APK asset trees. */
 static void check_data(void) {
   const char *files[] = {
     LIB_MAIN, LIB_UNITY, LIB_IL2CPP,
     "assets/bin/Data/Managed/Metadata/global-metadata.dat",
-    /* Merged UnityFS: base + UnityDataAssetPack combined at stage time (~221MB, all 3314
-     * serialized nodes) so the base's bare-name externals resolve as siblings. */
+    /* The original base archive remains present in both supported layouts. */
     "assets/bin/Data/data.unity3d",
     /* Loose PAD streaming side-file (textures/audio); still referenced by bare name. */
     "assets/bin/Data/resources.resource",
@@ -2462,6 +2462,12 @@ int main(int argc, char *argv[]) {
    * files through relative paths ("assets/bin/..."). AB2 ships flat data.unity3d
    * bundles (base data.unity3d + UnityDataAssetPack datapack.unity3d) -- no OBB. */
   chdir(DATA_ROOT);
+
+  /* A plain overlay of the base APK and UnityDataAssetPack leaves two UnityFS
+   * archives. Android presents them as one asset namespace; prepare the equivalent
+   * merged view once on the SD before Unity opens its data file. */
+  if (unityfs_prepare(DATA_ROOT) != 0)
+    fatal_error("Could not prepare Unity data. See unityfs_merge.log.");
 
   /* Load config.txt (language, optional rotation) from the game folder; create it
    * with defaults on first run so the options are discoverable/editable on the SD.
