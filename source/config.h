@@ -3,10 +3,11 @@
 #ifndef __CONFIG_H__
 #define __CONFIG_H__
 
-/* Memory layout. The region granule must match the libunity patch table. */
+/* Memory layout. Unity's 12-bit region table needs a wider granule in a
+ * 39-bit hbloader process than it does in Sphaira's 36-bit process. */
 #define MEMORY_MB          768
-#define AB2_REGION_GRANULE_MB 32
-#define MMAP_ARENA_ALIGN   ((size_t)AB2_REGION_GRANULE_MB * 1024 * 1024)
+#define MMAP_ARENA_ALIGN_36 ((size_t)32 * 1024 * 1024)
+#define MMAP_ARENA_ALIGN_39 ((size_t)128 * 1024 * 1024)
 #define MMAP_ARENA_RESERVE ((size_t)640 * 1024 * 1024)
 #define OC_WINDOW_BYTES    ((size_t)768 * 1024 * 1024)
 #define OC_POOL_BYTES      ((size_t)384 * 1024 * 1024)

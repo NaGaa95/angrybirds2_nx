@@ -804,12 +804,13 @@ int posix_memalign_fake(void **out, size_t align, size_t size) {
 // ------------------------------------------------------------------------------
 extern void  *g_mmap_arena_base;   // set by __libnx_initheap (main.c)
 extern size_t g_mmap_arena_size;
+extern size_t g_mmap_big_align;
 extern int    g_overcommit;        // 1 = alias-region on-demand commit
 extern u64    g_alias_base, g_alias_size;
 
 #define BIONIC_MAP_ANONYMOUS 0x20
 #define MMAP_PAGE       0x1000u
-#define MMAP_BIG_ALIGN  MMAP_ARENA_ALIGN
+#define MMAP_BIG_ALIGN  g_mmap_big_align
 #define MMAP_BIG_THRESH MMAP_BIG_ALIGN
 #define BIONIC_PROT_NONE 0x0
 #define BIONIC_PROT_WRITE 0x2

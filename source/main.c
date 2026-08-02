@@ -37,6 +37,7 @@ static size_t heap_so_limit = 0;
 /* mmap arena (consumed by mmap_fake/munmap_fake in libc_shim.c). */
 void  *g_mmap_arena_base = NULL;
 size_t g_mmap_arena_size = 0;
+size_t g_mmap_big_align = MMAP_ARENA_ALIGN_36;
 int    g_overcommit      = 0;
 u64    g_alias_base = 0, g_alias_size = 0;
 unsigned g_oc_heap_mb = 0, g_oc_freed_mb = 0;
@@ -251,10 +252,12 @@ static void nx_boot_boost_install_scene_hook(uintptr_t ib) {
 
 static void *oc_find_stack_window(size_t want, size_t *out_size) {
   *out_size = 0;
+  const u64 address_limit = (u64)g_mmap_big_align << 12;
   u64 sbase = 0, ssize = 0;
   svcGetInfo(&sbase, InfoType_StackRegionAddress, CUR_PROCESS_HANDLE, 0);
   svcGetInfo(&ssize, InfoType_StackRegionSize,    CUR_PROCESS_HANDLE, 0);
   if (!sbase || !ssize) return NULL;
+  if (sbase >= address_limit) return NULL;
   /* libnx/kernel create thread stacks + per-thread TLS (MemType_ThreadLocal) AFTER we arm
    * the window; virtmemAddReservation does NOT keep the kernel's TLS out. Empirically they
    * cluster in the LOW ~768MB of the stack region (observed up to ~0x309fb000). A window
@@ -263,7 +266,10 @@ static void *oc_find_stack_window(size_t want, size_t *out_size) {
    * prefer the largest hole that STARTS above the low zone; fall back to the absolute
    * largest only if no usable high hole exists. */
   const u64 lo_zone = sbase + 0x30000000ull;   /* skip the thread-resource churn band */
-  u64 end = sbase + ssize, a = sbase, best_a = 0, best_l = 0, hi_a = 0, hi_l = 0;
+  u64 end = sbase + ssize;
+  if (end < sbase || end > address_limit)
+    end = address_limit;
+  u64 a = sbase, best_a = 0, best_l = 0, hi_a = 0, hi_l = 0;
   while (a < end) {
     MemoryInfo mi; u32 pi;
     if (R_FAILED(svcQueryMemory(&mi, &pi, a))) break;
@@ -283,9 +289,9 @@ static void *oc_find_stack_window(size_t want, size_t *out_size) {
   int chose_hi = (hi_a && hi_l >= (256ull << 20));
   if (chose_hi) { best_a = hi_a; best_l = hi_l; }
   if (!best_a) return NULL;
-  u64 aligned = (best_a + (MMAP_ARENA_ALIGN - 1)) & ~(MMAP_ARENA_ALIGN - 1);
+  u64 aligned = (best_a + (g_mmap_big_align - 1)) & ~(g_mmap_big_align - 1);
   if (aligned >= best_a + best_l) return NULL;
-  u64 avail = ((best_a + best_l) - aligned) & ~(MMAP_ARENA_ALIGN - 1);
+  u64 avail = ((best_a + best_l) - aligned) & ~(g_mmap_big_align - 1);
   if (!avail) return NULL;
   if (avail > want) avail = want;
   *out_size = avail;
@@ -310,6 +316,21 @@ void __libnx_initheap(void) {
   void *addr;
   size_t size = 0;
   size_t mem_available = 0, mem_used = 0;
+
+  const u64 limit36 = 1ull << 36;
+  u64 aslr_base = 0, aslr_size = 0, stack_base = 0;
+  const int aslr39 =
+      R_SUCCEEDED(svcGetInfo(&aslr_base, InfoType_AslrRegionAddress,
+                             CUR_PROCESS_HANDLE, 0)) &&
+      R_SUCCEEDED(svcGetInfo(&aslr_size, InfoType_AslrRegionSize,
+                             CUR_PROCESS_HANDLE, 0)) &&
+      (aslr_base >= limit36 || aslr_size > limit36 - aslr_base);
+  const int stack39 =
+      R_SUCCEEDED(svcGetInfo(&stack_base, InfoType_StackRegionAddress,
+                             CUR_PROCESS_HANDLE, 0)) &&
+      stack_base >= limit36;
+  if (aslr39 || stack39)
+    g_mmap_big_align = MMAP_ARENA_ALIGN_39;
 
   if (envHasHeapOverride()) {
     addr = envGetHeapOverrideAddr();
@@ -344,7 +365,7 @@ void __libnx_initheap(void) {
   }
 
   /* Fallback: fully heap-backed aligned arena (no overcommit). */
-  const size_t big_align    = MMAP_ARENA_ALIGN;
+  const size_t big_align    = g_mmap_big_align;
   const size_t newlib_floor = 448 * MB;   /* malloc + il2cpp managed/GC heap */
   size_t arena_sz = MMAP_ARENA_RESERVE;
   size_t fake_heap_size;
@@ -427,18 +448,26 @@ static fn_v        Unity_nativeApplicationUnload;
 
 
 static int nx_patch_unity_regions(uintptr_t ub) {
-  
-  static const struct { uint32_t off, from, to; } P[] = {
-    {0xc5352c, 0x12be0009, 0x12bfc009}, {0xc5353c, 0x92648d35, 0x92679935},
-    {0xc53dbc, 0x52a20008, 0x52a04008}, {0xc54f30, 0x52a20009, 0x52a04009},
-    {0xc57014, 0x52a20009, 0x52a04009}, {0xc574e0, 0x12be000d, 0x12bfc00d},
-    {0xc5750c, 0x92648d36, 0x92679936}, {0xc58cb0, 0xd35cdc33, 0xd359d033},
-    {0xc58cb8, 0xd35cfd15, 0xd359fd15}, {0xc58d5c, 0x52a20008, 0x52a04008},
-    {0xc58f8c, 0xd35cfc28, 0xd359fc28}, {0xc58f9c, 0x92646c28, 0x92677828},
-    {0xc58fa4, 0xd35c9c2a, 0xd359902a}, {0xc58fb8, 0xd35cdc29, 0xd359d029},
-    {0xc58fbc, 0xb25c6feb, 0xb25f7beb}, {0xc58fc0, 0xf2a2000b, 0xf2a0400b},
-    {0xc59004, 0xcb0a7108, 0xcb0a6508}, {0xc59028, 0xd35c9c29, 0xd3599029},
-    {0xc5aa00, 0xd35c9e89, 0xd3599289},
+  static const struct { uint32_t off, from, to36, to39; } P[] = {
+    {0xc5352c, 0x12be0009, 0x12bfc009, 0x12bf0009},
+    {0xc5353c, 0x92648d35, 0x92679935, 0x92659135},
+    {0xc53dbc, 0x52a20008, 0x52a04008, 0x52a10008},
+    {0xc54f30, 0x52a20009, 0x52a04009, 0x52a10009},
+    {0xc57014, 0x52a20009, 0x52a04009, 0x52a10009},
+    {0xc574e0, 0x12be000d, 0x12bfc00d, 0x12bf000d},
+    {0xc5750c, 0x92648d36, 0x92679936, 0x92659136},
+    {0xc58cb0, 0xd35cdc33, 0xd359d033, 0xd35bd833},
+    {0xc58cb8, 0xd35cfd15, 0xd359fd15, 0xd35bfd15},
+    {0xc58d5c, 0x52a20008, 0x52a04008, 0x52a10008},
+    {0xc58f8c, 0xd35cfc28, 0xd359fc28, 0xd35bfc28},
+    {0xc58f9c, 0x92646c28, 0x92677828, 0x92657028},
+    {0xc58fa4, 0xd35c9c2a, 0xd359902a, 0xd35b982a},
+    {0xc58fb8, 0xd35cdc29, 0xd359d029, 0xd35bd829},
+    {0xc58fbc, 0xb25c6feb, 0xb25f7beb, 0xb25d73eb},
+    {0xc58fc0, 0xf2a2000b, 0xf2a0400b, 0xf2a1000b},
+    {0xc59004, 0xcb0a7108, 0xcb0a6508, 0xcb0a6d08},
+    {0xc59028, 0xd35c9c29, 0xd3599029, 0xd35b9829},
+    {0xc5aa00, 0xd35c9e89, 0xd3599289, 0xd35b9a89},
   };
   const int N = (int)(sizeof P / sizeof P[0]);
   if (N == 0) {
@@ -450,8 +479,11 @@ static int nx_patch_unity_regions(uintptr_t ub) {
       return 0;
     }
   }
-  for (int i = 0; i < N; i++)
-    so_patch_code((void *)(ub + P[i].off), &P[i].to, sizeof P[i].to);
+  const int use39 = g_mmap_big_align == MMAP_ARENA_ALIGN_39;
+  for (int i = 0; i < N; i++) {
+    const uint32_t replacement = use39 ? P[i].to39 : P[i].to36;
+    so_patch_code((void *)(ub + P[i].off), &replacement, sizeof replacement);
+  }
   return 1;
 }
 

@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "error.h"
 #include "unityfs_merge.h"
 
 #define UNITYFS_PATH_MAX       768
@@ -47,6 +48,12 @@ typedef struct {
 static int g_redirect_ready;
 static char g_cache_path[UNITYFS_PATH_MAX];
 static FILE *g_log;
+
+typedef struct {
+  uint64_t copied;
+  uint64_t total;
+  unsigned last_percent;
+} UnityFSCopyProgress;
 
 static void merge_log(const char *fmt, ...) {
   if (!g_log) return;
@@ -356,7 +363,21 @@ static int write_padding(FILE *f, uint64_t count) {
   return 0;
 }
 
-static int copy_archive_data(FILE *out, const UnityFSArchive *a, uint8_t *buffer) {
+static void copy_progress_update(UnityFSCopyProgress *progress, uint64_t amount) {
+  progress->copied += amount;
+  unsigned percent = progress->total
+                       ? (unsigned)((progress->copied * 100u) / progress->total)
+                       : 100u;
+  if (percent == progress->last_percent) return;
+  char status[96];
+  snprintf(status, sizeof status,
+           "Optimizing game assets (first boot)\n\n  %u%%", percent);
+  startup_status_update(status);
+  progress->last_percent = percent;
+}
+
+static int copy_archive_data(FILE *out, const UnityFSArchive *a, uint8_t *buffer,
+                             UnityFSCopyProgress *progress) {
   FILE *in = fopen(a->path, "rb");
   if (!in) return merge_error("cannot reopen %s (%d)", a->path, errno);
   if (fseeko(in, (off_t)a->data_offset, SEEK_SET) != 0) {
@@ -371,6 +392,7 @@ static int copy_archive_data(FILE *out, const UnityFSArchive *a, uint8_t *buffer
       return merge_error("I/O error while copying %s", a->path);
     }
     left -= n;
+    copy_progress_update(progress, n);
   }
   fclose(in);
   return 0;
@@ -420,13 +442,18 @@ static int write_merged_archive(const char *path, const UnityFSArchive *base,
   FILE *out = fopen(path, "wb");
   if (!out) return merge_error("cannot create %s (%d)", path, errno);
   uint8_t *buffer = malloc(UNITYFS_COPY_CHUNK);
+  UnityFSCopyProgress progress = {
+    .copied = 0,
+    .total = compressed_data,
+    .last_percent = 101,
+  };
   int ok = buffer &&
            write_exact(out, header, header_size) == 0 &&
            write_padding(out, header_aligned - header_size) == 0 &&
            write_exact(out, info, info_size) == 0 &&
            write_padding(out, data_offset - header_aligned - info_size) == 0 &&
-           copy_archive_data(out, base, buffer) == 0 &&
-           copy_archive_data(out, pack, buffer) == 0 &&
+           copy_archive_data(out, base, buffer, &progress) == 0 &&
+           copy_archive_data(out, pack, buffer, &progress) == 0 &&
            fflush(out) == 0 && !ferror(out);
   free(buffer);
   if (fclose(out) != 0) ok = 0;
@@ -528,6 +555,7 @@ int unityfs_prepare(const char *data_root) {
   uint8_t *merged_info = NULL;
   size_t merged_info_size = 0;
   int result = -1;
+  int status_started = 0;
   if (archive_parse(base_path, &base) != 0) goto done_base;
   if (archive_parse(pack_path, &pack) != 0) goto done_pack;
   merge_log("base: %llu bytes, %u blocks, %u nodes",
@@ -559,10 +587,13 @@ int unityfs_prepare(const char *data_root) {
   merge_log("building first-boot cache (%u blocks, %u nodes)",
             base.block_count + pack.block_count,
             base.node_count + pack.node_count);
+  startup_status_begin("Optimizing game assets (first boot)\n\n  0%");
+  status_started = 1;
   remove(temp_path);
   if (write_merged_archive(temp_path, &base, &pack,
                            merged_info, merged_info_size) != 0)
     goto done;
+  startup_status_update("Validating game data");
   if (!cache_matches(temp_path, &base, &pack, merged_info, merged_info_size)) {
     merge_error("new UnityFS cache failed validation");
     goto done;
@@ -586,6 +617,7 @@ done:
 done_pack:
   archive_free(&base);
 done_base:
+  if (status_started) startup_status_end();
   if (g_log) {
     merge_log(result == 0 ? "ready" : "failed");
     fclose(g_log);
