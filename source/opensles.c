@@ -434,8 +434,8 @@ int audio_fmod_open(int rate, int channels) {
     
     return 0;
   }
-  if (rate <= 0)     rate = 48000;
-  if (channels <= 0) channels = 2;
+  if (rate <= 0 || channels <= 0 || channels > 255)
+    return 0;
   SDL_AudioSpec want, have;
   SDL_zero(want);
   want.freq     = rate;
@@ -443,25 +443,33 @@ int audio_fmod_open(int rate, int channels) {
   want.channels = (Uint8)channels;
   want.samples  = 1024;
   want.callback = NULL; // queue mode: we push via SDL_QueueAudio
-  g_fmod_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have,
-                                   SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+  g_fmod_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
   if (!g_fmod_dev) {
-    
+    return 0;
+  }
+
+  if (have.freq != want.freq || have.format != want.format ||
+      have.channels != want.channels) {
+    SDL_CloseAudioDevice(g_fmod_dev);
+    g_fmod_dev = 0;
     return 0;
   }
   g_fmod_dev_rate = have.freq;
-  
   SDL_PauseAudioDevice(g_fmod_dev, 0);
   return g_fmod_dev_rate;
 }
 
-// Append PCM (S16, interleaved) to the device queue. Returns currently queued
-// bytes after the append, so the caller can pace itself to realtime.
-uint32_t audio_fmod_write(const void *pcm, int bytes) {
-  if (!g_fmod_dev || bytes <= 0)
-    return g_fmod_dev ? SDL_GetQueuedAudioSize(g_fmod_dev) : 0;
-  SDL_QueueAudio(g_fmod_dev, pcm, (Uint32)bytes);
-  return SDL_GetQueuedAudioSize(g_fmod_dev);
+// Append PCM (S16, interleaved) and report the queue depth for pacing.
+int audio_fmod_write(const void *pcm, int bytes, uint32_t *queued_bytes) {
+  if (queued_bytes)
+    *queued_bytes = g_fmod_dev ? SDL_GetQueuedAudioSize(g_fmod_dev) : 0;
+  if (!g_fmod_dev || !pcm || bytes <= 0)
+    return 0;
+  if (SDL_QueueAudio(g_fmod_dev, pcm, (Uint32)bytes) < 0)
+    return 0;
+  if (queued_bytes)
+    *queued_bytes = SDL_GetQueuedAudioSize(g_fmod_dev);
+  return 1;
 }
 
 uint32_t audio_fmod_queued(void) {

@@ -24,7 +24,7 @@ void opensles_shutdown(void);
 // FMOD (Unity native audio) output sink -- a dedicated queue-mode SDL device
 // driven by the native fmodProcess pump in jni_fake.c.
 int      audio_fmod_open(int rate, int channels);      // returns actual device rate (0=fail)
-uint32_t audio_fmod_write(const void *pcm, int bytes); // returns queued bytes after append
+int      audio_fmod_write(const void *pcm, int bytes, uint32_t *queued_bytes);
 uint32_t audio_fmod_queued(void);                      // currently queued bytes
 
 // interface-id tokens referenced by libff4.so relocations. Each is a unique

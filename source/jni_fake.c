@@ -1225,6 +1225,15 @@ static pthread_t g_fmod_thread;
 typedef int (*fmod_getinfo_fn)(void *env, void *thiz, int which);
 typedef int (*fmod_process_fn)(void *env, void *thiz, void *bytebuffer);
 
+enum {
+  FMOD_INFO_OUTPUT_RATE = 0,
+  FMOD_INFO_DSP_BLOCK_LENGTH,
+  FMOD_INFO_DSP_BUFFER_COUNT,
+  FMOD_INFO_OUTPUT_TYPE,
+  FMOD_INFO_CHANNELS,
+  FMOD_INFO_COUNT
+};
+
 // slot 230: every ByteBuffer we ever pass is our own staging buffer.
 static void *j_GetDirectBufferAddress(void *env, void *buf) {
   (void)env; (void)buf; return g_fmod_staging;
@@ -1234,22 +1243,50 @@ static long j_GetDirectBufferCapacity(void *env, void *buf) {
   (void)env; (void)buf; return (long)FMOD_STAGING_BYTES;
 }
 
-// Discover how many bytes fmodProcess actually wrote, once, by sentinel-fill.
-// Silence (0x0000) still differs from the 0xCD fill, so a silent first block is
-// detected correctly.
-static int probe_block_bytes(fmod_process_fn process, int frame_bytes) {
-  memset(g_fmod_staging, 0xCD, FMOD_STAGING_BYTES);
-  process(fake_env, &g_fmod_this_token, &g_fmod_bb_token);
-  int last = -1;
-  for (int i = FMOD_STAGING_BYTES - 1; i >= 0; i--) {
-    if (g_fmod_staging[i] != 0xCD) { last = i; break; }
+static int fmod_output_info_valid(const int info[FMOD_INFO_COUNT]) {
+  const int rate = info[FMOD_INFO_OUTPUT_RATE];
+  const int block_frames = info[FMOD_INFO_DSP_BLOCK_LENGTH];
+  const int buffer_count = info[FMOD_INFO_DSP_BUFFER_COUNT];
+  const int channels = info[FMOD_INFO_CHANNELS];
+
+  if (rate < 8000 || rate > 192000 || block_frames <= 0 || buffer_count <= 0)
+    return 0;
+  if (channels != 1 && channels != 2 && channels != 6)
+    return 0;
+
+  const size_t frame_bytes = (size_t)channels * sizeof(int16_t);
+  return (size_t)block_frames <= FMOD_STAGING_BYTES / frame_bytes;
+}
+
+static int fmod_wait_output_info(fmod_getinfo_fn getinfo,
+                                 int info[FMOD_INFO_COUNT]) {
+  if (!getinfo)
+    return 0;
+
+  int previous[FMOD_INFO_COUNT];
+  int have_previous = 0;
+  while (!g_fmod_stop && !jni_quit_requested) {
+    int current[FMOD_INFO_COUNT];
+    for (int i = 0; i < FMOD_INFO_COUNT; i++)
+      current[i] = getinfo(fake_env, &g_fmod_this_token, i);
+
+    if (fmod_output_info_valid(current)) {
+      if (have_previous &&
+          current[FMOD_INFO_OUTPUT_RATE] == previous[FMOD_INFO_OUTPUT_RATE] &&
+          current[FMOD_INFO_DSP_BLOCK_LENGTH] == previous[FMOD_INFO_DSP_BLOCK_LENGTH] &&
+          current[FMOD_INFO_DSP_BUFFER_COUNT] == previous[FMOD_INFO_DSP_BUFFER_COUNT] &&
+          current[FMOD_INFO_CHANNELS] == previous[FMOD_INFO_CHANNELS]) {
+        memcpy(info, current, sizeof(current));
+        return 1;
+      }
+      memcpy(previous, current, sizeof(previous));
+      have_previous = 1;
+    } else {
+      have_previous = 0;
+    }
+    svcSleepThread(10000000ULL); // 10 ms
   }
-  if (last < 0) return 0;
-  int bytes = last + 1;
-  if (frame_bytes > 0)                    // round up to a whole frame
-    bytes = ((bytes + frame_bytes - 1) / frame_bytes) * frame_bytes;
-  if (bytes > FMOD_STAGING_BYTES) bytes = FMOD_STAGING_BYTES;
-  return bytes;
+  return 0;
 }
 
 static void *fmod_audio_thread(void *arg) {
@@ -1260,62 +1297,51 @@ static void *fmod_audio_thread(void *arg) {
   install_bionic_tls(fmod_tls);
   fmod_getinfo_fn getinfo = (fmod_getinfo_fn)g_fmod_getinfo;
   fmod_process_fn process = (fmod_process_fn)g_fmod_process;
-  if (!process) {  return NULL; }
-
-  int rate = 48000, channels = 2;
-  if (getinfo) {
-    int info[5];
-    for (int i = 0; i < 5; i++)
-      info[i] = getinfo(fake_env, &g_fmod_this_token, i);
-    
-    /* Unity FMODAudioDevice contract: 0=output sample rate, 1=DSP block
-     * length, 2=number of DSP buffers, 3=bytes/sample flag, 4=channels. */
-    if (info[0] >= 8000 && info[0] <= 192000) rate = info[0];
-    if (info[4] == 1 || info[4] == 2 || info[4] == 6) channels = info[4];
-  }
-  const int frame_bytes = channels * 2; // S16
+  if (!process)
+    return NULL;
 
   // start() fires before the render loop has driven a System::update(), so the FMOD
   // mixer's DSP buffers aren't allocated yet and fmodProcess would fault. Wait a batch
   // of frames (each drives a System::update) before the first call.
   extern uint32_t port_frame_count(void);
-  #define FMOD_WARMUP_FRAMES 120u
+  const uint32_t warmup_frames = 120;
   uint32_t f0 = port_frame_count();
-  
-  for (int guard = 0; guard < 1500; guard++) {            // ~15s hard cap
-    if (port_frame_count() - f0 >= FMOD_WARMUP_FRAMES) break;
-    svcSleepThread(10000000ULL);                          // 10 ms
-  }
-  
-
-  // start() may still be wiring the FMOD output singleton; fmodProcess writes
-  // nothing until it's live. Retry the probe briefly before giving up.
-  int block = 0;
-  for (int tries = 0; tries < 100 && block <= 0; tries++) {
-    block = probe_block_bytes(process, frame_bytes);
-    if (block <= 0) svcSleepThread(10000000ULL); // 10 ms
-  }
-  
-  if (block <= 0) {
-    
+  while (!g_fmod_stop && !jni_quit_requested &&
+         port_frame_count() - f0 < warmup_frames)
+    svcSleepThread(10000000ULL); // 10 ms
+  if (g_fmod_stop || jni_quit_requested)
     return NULL;
-  }
 
-  int dev_rate = audio_fmod_open(rate, channels);
-  if (!dev_rate) {  return NULL; }
+  int info[FMOD_INFO_COUNT];
+  if (!fmod_wait_output_info(getinfo, info))
+    return NULL;
+
+  const int rate = info[FMOD_INFO_OUTPUT_RATE];
+  const int channels = info[FMOD_INFO_CHANNELS];
+  const int block = info[FMOD_INFO_DSP_BLOCK_LENGTH] *
+                    channels * (int)sizeof(int16_t);
+
+  if (!audio_fmod_open(rate, channels))
+    return NULL;
 
   // pace to realtime via the device queue; target ~4 blocks buffered.
   const uint32_t hi = (uint32_t)block * 6;
   const uint32_t lo = (uint32_t)block * 3;
   while (!g_fmod_stop && !jni_quit_requested) {
-    while (audio_fmod_queued() > hi)
+    while (!g_fmod_stop && !jni_quit_requested && audio_fmod_queued() > hi)
       svcSleepThread(2000000ULL); // 2 ms
+    if (g_fmod_stop || jni_quit_requested)
+      break;
+
     // refill toward the low watermark
     do {
-      process(fake_env, &g_fmod_this_token, &g_fmod_bb_token);
-      uint32_t q = audio_fmod_write(g_fmod_staging, block);
+      if (process(fake_env, &g_fmod_this_token, &g_fmod_bb_token) != 0)
+        break;
+      uint32_t q = 0;
+      if (!audio_fmod_write(g_fmod_staging, block, &q))
+        return NULL;
       if (q > hi) break;
-    } while (audio_fmod_queued() < lo);
+    } while (!g_fmod_stop && !jni_quit_requested && audio_fmod_queued() < lo);
     svcSleepThread(2000000ULL); // 2 ms
   }
   return NULL;
