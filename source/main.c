@@ -1,5 +1,6 @@
 /* Angry Birds 2 26.4.3 / Unity 6000.3.6f1 Switch wrapper. */
 
+#include "saltynx.h"
 #include <stdlib.h>
 #include <malloc.h>
 #include <string.h>
@@ -2484,6 +2485,8 @@ static void nx_patch_offline_quest_state(uintptr_t ib) {
 extern void nx_net_init(void);   /* bsd_bridge.c: nifm status + socketInitialize (enlarged CDN buffers) */
 
 int main(int argc, char *argv[]) {
+  saltynx_start();
+  atexit(saltynx_stop);
   (void)argc; (void)argv;
 #if AB2_BOOST_INITIAL_LOADING
   nx_boot_boost_start();
