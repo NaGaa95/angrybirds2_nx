@@ -14,7 +14,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 TARGET    := angrybird2_nx
 APP_TITLE := Angry Birds 2
 APP_AUTHOR := naga
-APP_VERSION := 1.0.2
+APP_VERSION := 1.0.3
 APP_ICON  := $(TOPDIR)/icon.jpg
 export APP_TITLE APP_AUTHOR APP_VERSION APP_ICON
 BUILD     := build
