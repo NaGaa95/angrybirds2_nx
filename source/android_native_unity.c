@@ -13,66 +13,7 @@
 #include <GLES3/gl3.h>
 #include "util.h"
 #include "config.h" /* config.portrait */
-
-#ifndef AWINDOW_FORMAT_RGBA_8888
-#define AWINDOW_FORMAT_RGBA_8888 1
-#endif
-
-/* opaque NDK types -> concrete libnx instances */
-typedef struct ANativeWindow ANativeWindow;     /* == NWindow* at runtime */
-typedef struct ALooper       ALooper;
-
-/* ==========================================================================
- * dock-aware screen state (also read by unity_jni.c's Display getters)
- * ========================================================================== */
-static u32 g_w = 1280, g_h = 720;   /* AB2 LANDSCAPE (native panel orientation) */
-
-void android_native_update_mode(void){
-  if (appletGetOperationMode() == AppletOperationMode_Console) { g_w = 1920; g_h = 1080; }
-  else                                                         { g_w = 1280; g_h = 720;  }
-}
-u32 android_native_width(void)  { return g_w; }
-u32 android_native_height(void) { return g_h; }
-
-/* ==========================================================================
- * ANativeWindow  ->  libnx NWindow
- * ========================================================================== */
-/* Crop the displayed region to exactly what Unity renders: nwindowSetDimensions may
- * allocate a width-aligned (720 -> 768) buffer, and without a matching crop the
- * compositor scans the extra uninitialized columns as garbage on the right edge.
- * Portrait rotation: the portrait render is rotated 90deg by the compositor to fill
- * the landscape panel (correct aspect, zero GPU cost). config.portrait picks the
- * direction: 1 = ROT_90 CW (default, right Joy-Con up), 2 = ROT_270 CCW (left up).
- * The touch remap in android_native_feed_hid switches on the same value. */
-static u32 nx_portrait_transform(void) {
-  if (config.portrait == 0) return 0;   /* AB2 landscape: identity, no compositor rotation */
-  return config.portrait == 2 ? (u32)NATIVE_WINDOW_TRANSFORM_ROT_270
-                              : (u32)NATIVE_WINDOW_TRANSFORM_ROT_90;
-}
-static void nx_window_set_geom(NWindow *w, u32 bw, u32 bh) {
-  nwindowSetDimensions(w, bw, bh);
-  nwindowSetCrop(w, 0, 0, bw, bh);
-  nwindowSetTransform(w, nx_portrait_transform());
-}
-
-ANativeWindow *android_native_window(void){
-  NWindow *w = nwindowGetDefault();
-  nx_window_set_geom(w, g_w, g_h);
-  return (ANativeWindow *)w;
-}
-void     ANativeWindow_acquire(ANativeWindow *w){ (void)w; }                 /* singleton: refcount no-op */
-void     ANativeWindow_release(ANativeWindow *w){ (void)w; }
-ANativeWindow *ANativeWindow_fromSurface(void *env, void *surface){
-  (void)env; (void)surface; return android_native_window();               /* one surface == our window */
-}
-int32_t  ANativeWindow_getWidth (ANativeWindow *w){ (void)w; return (int32_t)g_w; }
-int32_t  ANativeWindow_getHeight(ANativeWindow *w){ (void)w; return (int32_t)g_h; }
-int32_t  ANativeWindow_getFormat(ANativeWindow *w){ (void)w; return AWINDOW_FORMAT_RGBA_8888; }
-int32_t  ANativeWindow_setBuffersGeometry(ANativeWindow *w, int32_t width, int32_t height, int32_t format){
-  (void)format;
-  if (width > 0 && height > 0) nx_window_set_geom((NWindow *)w, (u32)width, (u32)height);
-  return 0;
-}
+#include "android_native_unity.h"
 
 /* ==========================================================================
  * ALooper -- Unity uses it as a per-thread wait/wake primitive (not real fd
@@ -194,6 +135,7 @@ void android_native_input_init(void){
 typedef uint8_t (*inject_fn)(void*,void*,void*,int);
 
 void android_native_feed_hid(inject_fn inject, void *env, void *thiz){
+  const u32 g_w = android_native_width(), g_h = android_native_height();
   padUpdate(&g_pad);
 
   /* ---- handheld touchscreen ---- */
@@ -280,6 +222,7 @@ static GLuint cur_link(const char *vs, const char *fs){
 }
 void android_native_draw_cursor(void){
   if (!g_cursor_shown) return;
+  const u32 g_w = android_native_width(), g_h = android_native_height();
   static struct { GLuint prog; GLint pos, loc, feather; int tried; } c = {0,0,0,0,0};
   if (!c.tried){
     c.tried = 1;

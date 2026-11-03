@@ -1106,8 +1106,8 @@ static juint field_int(const FakeID *id) {
   if (name_has(c, "unity3d/player/UnityPlayer")) {
     if (!strcmp(n, "SDK_INT"))     return NX_SDK_INT;
     if (!strcmp(n, "densityDpi"))  return 320;
-    if (!strcmp(n, "widthPixels")) return 720;    /* fbstub45 PORTRAIT (stable) */
-    if (!strcmp(n, "heightPixels"))return 1280;
+    if (!strcmp(n, "widthPixels")) return android_native_width();
+    if (!strcmp(n, "heightPixels"))return android_native_height();
     if (!strcmp(n, "STREAM_MUSIC"))return 3;   /* AudioManager.STREAM_MUSIC      */
     if (!strcmp(n, "GET_DEVICES_OUTPUTS")) return 2; /* AudioManager.GET_DEVICES_OUTPUTS */
     if (!strcmp(n, "ROUTE_TYPE_LIVE_VIDEO")) return 1;
@@ -1130,8 +1130,8 @@ static juint field_int(const FakeID *id) {
   }
   // DisplayMetrics integer fields (width/height/dpi)
   if (name_has(c, "DisplayMetrics")) {
-    if (!strcmp(n, "widthPixels"))  return 720;    /* fbstub45 PORTRAIT (stable) */
-    if (!strcmp(n, "heightPixels")) return 1280;
+    if (!strcmp(n, "widthPixels"))  return android_native_width();
+    if (!strcmp(n, "heightPixels")) return android_native_height();
     if (!strcmp(n, "densityDpi"))   return 320;    /* xhdpi bucket                */
   }
   return 0;

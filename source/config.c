@@ -23,10 +23,6 @@
 Config config;
 static int config_needs_rewrite = 0;
 
-// actual screen size that is in use right now
-int screen_width = 1280;  /* AB2 LANDSCAPE (native panel orientation) */
-int screen_height = 720;
-
 static inline void parse_var(const char *name, const char *value) {
   // retired options -> drop them and rewrite the file without them
   if (!strcmp(name, "touchscreen") || !strcmp(name, "controller_cursor") || !strcmp(name, "widescreen")) {

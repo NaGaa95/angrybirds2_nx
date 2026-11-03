@@ -546,12 +546,14 @@ static void gl_ShaderSource_log(GLuint sh, GLsizei count, const GLchar *const *s
 
 // switch-mesa returns 0 for EGL_WIDTH/EGL_HEIGHT on the window surface even
 // though it renders full-screen; the engine trusts that and sets a 0x0 viewport
-// (nothing draws). Hand back the real panel size instead.
+// (nothing draws). Hand back the current buffer size instead.
+extern uint32_t android_native_width(void);
+extern uint32_t android_native_height(void);
 static EGLBoolean egl_QuerySurface_log(EGLDisplay d, EGLSurface s, EGLint attr, EGLint *val) {
   EGLBoolean r = eglQuerySurface(d, s, attr, val);
-  if (val) {
-    if (attr == 0x3057 /*EGL_WIDTH*/  && *val <= 0) { *val = screen_width;  r = EGL_TRUE; }
-    if (attr == 0x3056 /*EGL_HEIGHT*/ && *val <= 0) { *val = screen_height; r = EGL_TRUE; }
+  if (r == EGL_TRUE && val) {
+    if (attr == EGL_WIDTH  && *val <= 0) *val = (EGLint)android_native_width();
+    if (attr == EGL_HEIGHT && *val <= 0) *val = (EGLint)android_native_height();
   }
   return r;
 }

@@ -13,14 +13,11 @@
 #include "unityfs_merge.h"
 #include "util.h"
 #include "config.h"   /* AB2_PACKAGE etc. */
+#include "android_native_unity.h"
 
 /* FakeID layout we read (must match jni_fake.c). Only the char[] fields. */
 struct FakeID { uint32_t tag; char cls[96]; char name[64]; char sig[160]; };
 
-#define SCREEN_W_HANDHELD 720   /* fbstub45 PORTRAIT (stable) */
-#define SCREEN_H_HANDHELD 1280
-#define SCREEN_W_DOCKED   1080
-#define SCREEN_H_DOCKED   1920
 #define REFRESH_HZ        60
 
 static char g_root[192];            /* e.g. /switch/zookeeper                 */
@@ -502,9 +499,8 @@ uint64_t unity_dispatch_int(void *recv, const void *id_, va_list va){ const stru
 
   /* Display / DisplayMetrics / Configuration ints */
   if (has(cls,"view/Display")||has(cls,"DisplayMetrics")||has(cls,"DisplayManager")){
-    int docked = 0; /* CHECK: query appletGetOperationMode() at call time */
-    if (has(m,"getWidth")||has(m,"WidthPixels")||has(m,"getRawWidth"))  return docked?SCREEN_W_DOCKED:SCREEN_W_HANDHELD;
-    if (has(m,"getHeight")||has(m,"HeightPixels")||has(m,"getRawHeight"))return docked?SCREEN_H_DOCKED:SCREEN_H_HANDHELD;
+    if (has(m,"getWidth")||has(m,"WidthPixels")||has(m,"getRawWidth")) return android_native_width();
+    if (has(m,"getHeight")||has(m,"HeightPixels")||has(m,"getRawHeight")) return android_native_height();
     if (has(m,"getRotation")) return 0;
     if (has(m,"getDisplayId")) return 0;
     return 0;

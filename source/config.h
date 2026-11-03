@@ -49,9 +49,6 @@
 #define AB2_SKIP_OFFLINE_BLUEPRINT_ERASE 1
 #define AB2_SKIP_ONLINE_SERVER_COMPATIBILITY 1
 
-extern int screen_width;
-extern int screen_height;
-
 #define LANG_AUTO 0
 #define LANG_JA   1
 #define LANG_EN   2

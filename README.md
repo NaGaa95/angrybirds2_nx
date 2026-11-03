@@ -29,6 +29,8 @@ The three libraries must come from the `arm64-v8a` lib.
 
 This will not work in applet/album mode. Use a game override (hold R while launching a title) or a forwarder so the game receives the full application memory pool.
 
+New render surfaces default to 1280×720 in handheld mode and 1920×1080 when docked. An active surface keeps its allocated size across docking changes; the Switch compositor scales it to the display. Set both `screen_width` and `screen_height` to positive values in `config.txt` to choose a fixed initial render size.
+
 ### How to build
 
 You need devkitA64 plus the following devkitPro packages:

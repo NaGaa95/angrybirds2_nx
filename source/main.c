@@ -2546,11 +2546,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /* Landscape game: report a landscape surface (W>H) matching the native panel, so
-   * the engine renders directly with correct aspect and no compositor rotation.
-   * Handheld 1280x720 / docked 1920x1080 (see android_native_unity.c). */
-  if (appletGetOperationMode() == AppletOperationMode_Console) { screen_width = 1920; screen_height = 1080; }
-  else                                                         { screen_width = 1280; screen_height = 720;  }
+  android_native_update_mode();
 
   SDL_SetMainReady();
   SDL_Init(SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER);
